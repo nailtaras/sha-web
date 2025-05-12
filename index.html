@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <title>SHA-API</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body {
+      background: #121212;
+      color: #e0e0e0;
+      font-family: sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    .form-container {
+      background: #1e1e1e;
+      border-radius: 10px;
+      max-width: 500px;
+      width: 100%;
+      margin: 0 auto 24px;
+      padding: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 700;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 20px;
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border: 0;
+      border-radius: 5px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #03a9f4;
+      cursor: pointer;
+      position: relative;
+    }
+    button:disabled {
+      background: #0288d1;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    button.loading::after {
+      content: "";
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      margin-top: -8px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .result {
+      position: relative;
+      background: #1e1e1e;
+      border-radius: 8px;
+      margin: 10px auto;
+      max-width: 500px;
+      width: 100%;
+      word-break: break-word;
+      padding: 20px;
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+      filter: blur(2px);
+      max-height: 0;
+      overflow: hidden;
+      transition: transform 0.5s, opacity 0.5s, filter 0.5s, max-height 0.5s, padding 0.5s, margin 0.5s;
+    }
+    .result.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+      max-height: 1000px;
+    }
+    .result.hide {
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+      filter: blur(2px);
+      max-height: 0;
+      padding: 0;
+      margin: 0;
+    }
+    .result-content {
+      margin-top: 10px;
+      margin-left: 40px;
+      margin-right: 40px;
+    }
+    .result-timer {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 12px;
+      color: #999;
+      font-style: italic;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .close-btn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: none;
+      border: none;
+      color: #e0e0e0;
+      font: 700 22px monospace;
+      cursor: pointer;
+      padding: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 15;
+    }
+    .close-btn:hover { color: #fff; }
+    .copy-btn {
+      font-size: 11px;
+      padding: 3px 8px;
+      margin-top: 6px;
+      background: #444;
+      color: #ccc;
+      border: 0;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .copy-btn:hover { background: #666; }
+
+    #alert-container {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .alert {
+      background: #333;
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      animation: fade 2.2s forwards;
+    }
+    @keyframes fade {
+      0% { opacity: 0; transform: translateY(-8px); }
+      10%, 90% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-8px); }
+    }
+    @media(max-width:600px){
+      .form-container, .result { width: 90%; }
+      .result-content { margin-left: 35px; margin-right: 35px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="alert-container"></div>
+
+<div class="form-container">
+  <form id="myForm">
+    <label for="text">Text</label>
+    <input id="text" required>
+
+    <label for="iterations">Iterations</label>
+    <input id="iterations" type="number" value="1">
+
+    <label for="algorithm">Algorithm</label>
+    <select id="algorithm">
+      <option value="SHA-256">sha256</option>
+      <option value="SHA-512">sha512</option>
+    </select>
+
+    <button type="submit">Send</button>
+  </form>
+</div>
+
+<div id="results"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const alerts = $('alert-container');
+const worker = new Worker('hash-worker.js');
+
+function showAlert(msg) {
+  const el = document.createElement('div');
+  el.className = 'alert';
+  el.textContent = msg;
+  alerts.append(el);
+  setTimeout(() => el.remove(), 2200);
+}
+
+function copy(_, text) {
+  (navigator.clipboard?.writeText(text) ?? Promise.reject())
+    .then(() => showAlert('Copied'))
+    .catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.append(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      showAlert('Copied');
+    });
+}
+
+function makeResult(hash, base64, textFromBase64, time) {
+  const wrap = document.createElement('div');
+  wrap.className = 'result';
+
+  const timer = document.createElement('div');
+  timer.className = 'result-timer';
+  timer.textContent = '0 s';
+  wrap.appendChild(timer);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'close-btn';
+  closeBtn.textContent = '×';
+  wrap.appendChild(closeBtn);
+
+  const content = document.createElement('div');
+  content.className = 'result-content';
+  content.innerHTML = `
+    <strong>Hash:</strong><br>${hash}
+    <button class="copy-btn">copy</button><br><br>
+    <strong>Base64:</strong><br>${base64}
+    <button class="copy-btn">copy</button><br><br>
+    <strong>Text:</strong><br>${textFromBase64}
+    <button class="copy-btn">copy</button><br><br>
+    <strong>Time:</strong><br>${time}
+  `;
+  wrap.appendChild(content);
+
+  const start = Date.now();
+  const interval = setInterval(() => {
+    const secs = Math.floor((Date.now() - start) / 1000);
+    timer.textContent = `${secs} s`;
+  }, 1000);
+
+  closeBtn.onclick = () => {
+    clearInterval(interval);
+    wrap.classList.remove('show');
+    wrap.classList.add('hide');
+    setTimeout(() => wrap.remove(), 500);
+  };
+
+  const valuesCopy = [hash, base64, textFromBase64];
+  content.querySelectorAll('.copy-btn').forEach((btn, i) => {
+    btn.onclick = e => copy(e, valuesCopy[i]);
+  });
+
+  setTimeout(() => wrap.classList.add('show'), 20);
+  return wrap;
+}
+
+function textToBase64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+function base64ToText(str) {
+  return decodeURIComponent(escape(atob(str)));
+}
+
+$('myForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = $('myForm').querySelector('button');
+  btn.disabled = true;
+  btn.classList.add('loading');
+
+  const text = $('text').value;
+  const iterations = parseInt($('iterations').value) || 1;
+  const algorithm = $('algorithm').value;
+
+  const base64 = textToBase64(text);
+  const textFromBase64 = base64ToText(base64);
+  const start = performance.now();
+
+  worker.postMessage({ algorithm, text: base64, iterations });
+
+  worker.onmessage = function(e) {
+    if (e.data.error) {
+      showAlert('Error: ' + e.data.error);
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      return;
+    }
+
+    const hash = e.data.hash;
+    const end = performance.now();
+    const time = ((end - start) / 1000).toFixed(4) + ' s';
+
+    const block = makeResult(hash, base64, textFromBase64, time);
+    $('results').prepend(block);
+    block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    btn.disabled = false;
+    btn.classList.remove('loading');
+  };
+});
+</script>
+</body>
+</html>
